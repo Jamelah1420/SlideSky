@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AutoDash</title>
+  <meta name="theme-color" content="#0b0f14" />
+  <meta name="color-scheme" content="dark light" />
+  <meta name="description"
+    content="Upload a dataset and generate a professional, themed presentation with insights and charts." />
+
+  <!-- Performance for Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+
+  <!-- Display + Text fonts (match app design) -->
+  <link
+    href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,700;9..144,800&family=Inter:wght@400;600;800&display=swap"
+    rel="stylesheet" />
+
+  <!-- Tailwind config (CDN mode) -->
+  <script>
+    tailwind = window.tailwind || {};
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            display: ['"Fraunces"', "ui-serif", "Georgia", "serif"],
+            sans: ["Inter", "ui-sans-serif", "system-ui", "sans-serif"],
+          },
+          colors: {
+            canvas: "#0b0f14",
+            panel: "#0e1420",
+          },
+        },
+      },
+      darkMode: "media",
+    };
+  </script>
+
+  <!-- Tailwind (CDN, dev-only). For production, use a build. -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Baseline page styling -->
+  <style>
+    html,
+    body,
+    #root {
+      height: 100%;
+    }
+
+    body {
+      margin: 0;
+      background: #0b0f14;
+      /* matches app background */
+      color: #e5e7eb;
+      font-family: "Inter", ui-sans-serif, system-ui, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    h1,
+    h2,
+    h3,
+    .font-display {
+      font-family: "Fraunces", ui-serif, Georgia, serif;
+    }
+  </style>
+</head>
+
+<body class="bg-canvas">
+  <div id="root"></div>
+  <script type="module" src="/src/main.jsx"></script>
+</body>
+
+</html>
