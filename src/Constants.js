@@ -1,10 +1,13 @@
-// Constants.js
+// === src/Constants.js ===
 
 // --- Custom Gradient for Hero/Thank You/Section Title Slides ---
 export const CUSTOM_GRADIENT_BG = 'linear-gradient(to top right, #000000, #0D0F1F 30%, #152238 60%, #4D3D75 80%, #996E49)';
 export const CUSTOM_GRADIENT_TEXT_COLOR = '#FFFFFF';
+export const CALIBRI_STACK =
+  'Calibri, Carlito, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif';
 
 // --- THEMES ---
+// Using a simpler, highly legible font family for the entire presentation
 export const THEMES = {
     DISPLAY_FONT: 'Inter, sans-serif', 
     TEXT_FONT: 'Inter, sans-serif',
