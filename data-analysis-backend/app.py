@@ -1,9 +1,6 @@
-# === BACKEND: server.py ===
-
 import os
 import json
 import pandas as pd
-# ... (rest of imports) ...
 import io
 import re
 from flask import Flask, request, jsonify
@@ -21,16 +18,8 @@ CORS(app)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 MODEL_NAME = "gemini-2.5-flash"
 
-# --- FIXED_GENERATED_TITLES remain unchanged ---
-FIXED_GENERATED_TITLES = [
-    "Relevant Inquiries", 
-    "About the Dataset", 
-    
-]
-
-# ---------------- Helpers (unchanged) ----------------
+# ---------------- Helpers ----------------
 def sanitize_column_name(name: str) -> str:
-# ... (rest of helper functions) ...
     name = re.sub(r'[_\-\.\s]+', ' ', str(name)).strip()
     if not name: return "Unnamed Field"
     title = name.title()
@@ -123,7 +112,7 @@ def to_float(v):
     except Exception:
         return 0.0
 
-# ---------------- Chart spec generator (unchanged) ----------------
+# ---------------- Chart spec generator (MODIFIED for diverse relationships) ----------------
 
 def get_top_categorical_fields(df: pd.DataFrame, count: int = 3, max_unique: int = 50, min_unique: int = 2) -> list[str]:
     """Returns a list of the top 'count' most relevant categorical fields for charting."""
@@ -145,71 +134,74 @@ def generate_chart_specs(df: pd.DataFrame) -> list[dict]:
     df = df.copy()
     time_col = detect_time_column(df)
     main_value = determine_key_metric(df)
-    chart_sections: list[dict] = []
-
+    
     if main_value is None:
-        return chart_sections
+        return []
 
-    # 1. Get a ranked list of relevant categorical fields (segments)
-    top_segments = get_top_categorical_fields(df, count=3, max_unique=15) # Limit max_unique for better visuals
-    primary_group_field = top_segments[0] if top_segments else None
+    # Get multiple categorical fields for different analyses
+    top_segments = get_top_categorical_fields(df, count=4, max_unique=20)
+    primary_group = top_segments[0] if top_segments else None
+    secondary_group = top_segments[1] if len(top_segments) > 1 else None
+    tertiary_group = top_segments[2] if len(top_segments) > 2 else None
 
-    # 2. BAR CHART: primary_group_field by sum(main_value)
-    if primary_group_field:
-        agg = (
-            df.groupby(primary_group_field, dropna=False)[main_value]
-              .sum(numeric_only=True)
-              .sort_values(ascending=False)
-              .head(8)
+    chart_specs = []
+    
+    # STRATEGY 1: BAR CHART - Total values by primary group (Business Performance)
+    if primary_group:
+        total_by_primary = (
+            df.groupby(primary_group, dropna=False)[main_value]
+            .sum(numeric_only=True)
+            .sort_values(ascending=False)
+            .head(8)
         )
-        if not agg.empty:
-            bar_data = [{"category": str(idx), "value": round(to_float(val), 2), "color": safe_color(i)} for i, (idx, val) in enumerate(agg.items())]
-            chart_sections.append({
-                "sectionTitle": f"Top {primary_group_field} by {sanitize_column_name(main_value)}",
+        if not total_by_primary.empty:
+            bar_data = [{"category": str(idx), "value": round(to_float(val), 2), "color": safe_color(i)} 
+                       for i, (idx, val) in enumerate(total_by_primary.items())]
+            chart_specs.append({
+                "sectionTitle": f"Total {sanitize_column_name(main_value)} by {primary_group}",
                 "isChartSlide": True,
                 "chartType": "bar",
                 "chartData": bar_data
             })
 
-    # 3. PIE CHART: distribution (top 5 + other) using primary_group_field
-    if primary_group_field:
-        total = to_float(df[main_value].sum(numeric_only=True))
-        if total > 0:
-            sums = (
-                df.groupby(primary_group_field, dropna=False)[main_value]
-                  .sum(numeric_only=True)
-                  .sort_values(ascending=False)
-            )
-            top5 = sums.head(5)
-            other = sums.iloc[5:].sum() if len(sums) > 5 else 0.0
-            pie_items = list(top5.items())
+    # STRATEGY 2: PIE CHART - Percentage contribution using COUNT distribution (Market Share)
+    if secondary_group:
+        # Use COUNT instead of SUM for completely different perspective
+        count_distribution = df[secondary_group].value_counts(dropna=False).head(6)
+        if len(count_distribution) > 1:
+            total_count = count_distribution.sum()
             pie_data = []
-            for i, (cat, val) in enumerate(pie_items):
-                pct = (to_float(val) / total) * 100.0
-                pie_data.append({"category": str(cat), "value": round(pct, 1), "color": safe_color(i)})
-            if other > 0:
-                pie_data.append({"category": "Other", "value": round((to_float(other)/total)*100.0, 1), "color": safe_color(len(pie_items))})
+            for i, (category, count) in enumerate(count_distribution.items()):
+                percentage = (count / total_count) * 100
+                pie_data.append({
+                    "category": str(category),
+                    "value": round(percentage, 1),
+                    "color": safe_color(i)
+                })
+            
             if pie_data:
-                chart_sections.append({
-                    "sectionTitle": f"{sanitize_column_name(main_value)} Share by {primary_group_field}",
+                chart_specs.append({
+                    "sectionTitle": f"Distribution of Records by {secondary_group}",
                     "isChartSlide": True,
                     "chartType": "pie",
                     "chartData": pie_data
                 })
 
-    # 4. LINE CHART: monthly trend (if time data is present)
-    if time_col:
+    # STRATEGY 3: LINE CHART - Time-based trend (Performance Over Time)
+    if time_col and len(chart_specs) < 3:
         try:
-            ts = df[[time_col, main_value]].dropna()
-            ts[time_col] = pd.to_datetime(ts[time_col], errors='coerce')
-            ts = ts.dropna(subset=[time_col])
-            if not ts.empty:
-                ts = ts.set_index(time_col).sort_index()
-                monthly = ts[main_value].resample('MS').sum()
-                if not monthly.empty and monthly.shape[0] >= 2:
-                    line_data = [{"month": month_short(idx), "value": round(to_float(val), 2)} for idx, val in monthly.items()]
-                    chart_sections.append({
-                        "sectionTitle": f"Monthly {sanitize_column_name(main_value)} Trend",
+            ts_data = df[[time_col, main_value]].dropna()
+            ts_data[time_col] = pd.to_datetime(ts_data[time_col], errors='coerce')
+            ts_data = ts_data.dropna(subset=[time_col])
+            
+            if not ts_data.empty:
+                # Use monthly averages for trend analysis
+                monthly_avg = ts_data.set_index(time_col)[main_value].resample('MS').mean()
+                if len(monthly_avg) >= 2:
+                    line_data = [{"month": month_short(idx), "value": round(to_float(val), 2)} 
+                                for idx, val in monthly_avg.items()]
+                    chart_specs.append({
+                        "sectionTitle": f"Monthly Trend of {sanitize_column_name(main_value)}",
                         "isChartSlide": True,
                         "chartType": "line",
                         "chartData": line_data
@@ -217,62 +209,65 @@ def generate_chart_specs(df: pd.DataFrame) -> list[dict]:
         except Exception:
             pass
 
-    # 5. HORIZONTAL BAR: Second most relevant group (if different from primary)
-    alt_group = next((g for g in top_segments if g != primary_group_field), None)
-    
-    if alt_group:
-        agg = (
-            df.groupby(alt_group, dropna=False)[main_value]
-              .sum(numeric_only=True)
-              .sort_values(ascending=False)
-              .head(10)
-        )
-        if not agg.empty:
-            hbar_data = [{"category": str(idx), "value": round(to_float(val), 2)} for idx, val in agg.items()]
-            chart_sections.append({
-                "sectionTitle": f"{sanitize_column_name(main_value)} by {alt_group}",
+    # STRATEGY 4: HORIZONTAL BAR - Efficiency/Performance ratios
+    if len(chart_specs) < 3 and primary_group and secondary_group:
+        try:
+            # Calculate average values by primary group for efficiency comparison
+            efficiency_data = (
+                df.groupby(primary_group, dropna=False)[main_value]
+                .mean(numeric_only=True)
+                .sort_values(ascending=True)  # Sort for better horizontal bar display
+                .head(8)
+            )
+            if not efficiency_data.empty:
+                horizontal_data = [{"category": str(idx), "value": round(to_float(val), 2), "color": safe_color(i)} 
+                                  for i, (idx, val) in enumerate(efficiency_data.items())]
+                chart_specs.append({
+                    "sectionTitle": f"Average {sanitize_column_name(main_value)} Efficiency",
+                    "isChartSlide": True,
+                    "chartType": "horizontal",
+                    "chartData": horizontal_data
+                })
+        except Exception:
+            pass
+
+    # STRATEGY 5: AREA CHART - Cumulative growth
+    if len(chart_specs) < 3 and time_col:
+        try:
+            ts_data = df[[time_col, main_value]].dropna()
+            ts_data[time_col] = pd.to_datetime(ts_data[time_col], errors='coerce')
+            ts_data = ts_data.dropna(subset=[time_col])
+            
+            if not ts_data.empty:
+                cumulative_growth = ts_data.set_index(time_col)[main_value].resample('MS').sum().cumsum()
+                if len(cumulative_growth) >= 2:
+                    area_data = [{"month": month_short(idx), "value": round(to_float(val), 2)} 
+                                for idx, val in cumulative_growth.items()]
+                    chart_specs.append({
+                        "sectionTitle": f"Cumulative Growth of {sanitize_column_name(main_value)}",
+                        "isChartSlide": True,
+                        "chartType": "area",
+                        "chartData": area_data
+                    })
+        except Exception:
+            pass
+
+    # STRATEGY 6: Alternative - Value counts by tertiary field if others fail
+    if len(chart_specs) < 3 and tertiary_group:
+        value_counts = df[tertiary_group].value_counts(dropna=False).head(8)
+        if not value_counts.empty:
+            horizontal_data = [{"category": str(idx), "value": int(val), "color": safe_color(i)} 
+                              for i, (idx, val) in enumerate(value_counts.items())]
+            chart_specs.append({
+                "sectionTitle": f"Record Count by {tertiary_group}",
                 "isChartSlide": True,
                 "chartType": "horizontal",
-                "chartData": hbar_data
+                "chartData": horizontal_data
             })
 
-    # 6. STACKED: Cross-analysis of the top two relevant segments (if both low cardinality)
-    if len(top_segments) >= 2:
-        base, segment = top_segments[0], top_segments[1]
-        
-        # Check if cardinality is small enough for a clean stacked chart (max 8 categories)
-        base_n = df[base].nunique(dropna=True)
-        segment_n = df[segment].nunique(dropna=True)
-        
-        if base_n <= 8 and segment_n <= 8:
-            pivot = df.pivot_table(index=base, columns=segment, values=main_value, aggfunc='sum', fill_value=0)
-            
-            # Keep top 6 base categories for readability
-            totals = pivot.sum(axis=1).sort_values(ascending=False)
-            pivot = pivot.loc[totals.head(6).index]
-            
-            # Keep top 4 segments
-            seg_totals = pivot.sum(axis=0).sort_values(ascending=False)
-            top_segments_for_chart = seg_totals.head(4).index.tolist()
-            pivot = pivot[top_segments_for_chart]
-            
-            if not pivot.empty:
-                stacked_data = []
-                for i, (idx, row) in enumerate(pivot.iterrows()):
-                    segments_list = [{"name": str(seg), "value": round(to_float(row.get(seg, 0.0)), 2), "color": safe_color(j)} for j, seg in enumerate(pivot.columns)]
-                    stacked_data.append({"category": str(idx), "segments": segments_list})
-                chart_sections.append({
-                    "sectionTitle": f"{sanitize_column_name(main_value)} by {base} and {segment}",
-                    "isChartSlide": True,
-                    "chartType": "stacked",
-                    "chartData": stacked_data
-                })
-    
-    # Return a maximum of 5 charts to keep the deck focused and high-value.
-    return chart_sections[:5]
+    return chart_specs[:3]
 
-
-# --------------- Core Brief & Prompt (MODIFIED) ---------------
+# --------------- Core Brief & Prompt (MODIFIED for AI-generated titles) ---------------
 
 def generate_data_brief_and_prompt(df: pd.DataFrame) -> dict:
     if df.empty: return {"error": "DataFrame is empty."}
@@ -286,6 +281,13 @@ def generate_data_brief_and_prompt(df: pd.DataFrame) -> dict:
     total_records = len(df_sanitized)
     total_sum = float(series.sum(skipna=True))
     average = float(series.mean(skipna=True)) if series.notna().any() else 0.0
+    median_val = float(series.median(skipna=True)) if series.notna().any() else 0.0
+    std_dev = float(series.std(skipna=True)) if series.notna().any() and len(series) > 1 else 0.0
+
+    # Calculate additional statistics for unique insights
+    top_10_pct = float(series.quantile(0.9)) if series.notna().any() else 0.0
+    bottom_10_pct = float(series.quantile(0.1)) if series.notna().any() else 0.0
+    cv = (std_dev / average) * 100 if average > 0 else 0  # Coefficient of variation
 
     top_group = "N/A"; share_text = "N/A"; balance_text = "No grouping available"
     if group_field:
@@ -304,15 +306,22 @@ def generate_data_brief_and_prompt(df: pd.DataFrame) -> dict:
                 balance_text = "Only one group found"
 
     brief = {
-        "overview": {"records": total_records, "mainValue": main_value, "total": f"{total_sum:,.0f}", "average": f"{average:,.0f}"},
+        "overview": {
+            "records": total_records, 
+            "mainValue": main_value, 
+            "total": f"{total_sum:,.0f}", 
+            "average": f"{average:,.0f}",
+            "median": f"{median_val:,.0f}",
+            "stdDev": f"{std_dev:,.0f}",
+            "top10Percentile": f"{top_10_pct:,.0f}",
+            "bottom10Percentile": f"{bottom_10_pct:,.0f}",
+            "coefficientOfVariation": f"{cv:.1f}%"
+        },
         "leaders": {"grouping": group_field or "N/A", "topGroup": top_group, "share": share_text, "balance": balance_text}
     }
 
-    # The model now generates 9 slides (excluding Contents)
-      # The model now generates 8 slides (excluding Contents)
-    analytical_titles_list = json.dumps(FIXED_GENERATED_TITLES, indent=2)
     user_prompt = f"""
-ROLE: You are an expert business communicator writing a summary for a CEO. Your content MUST be at a Grade 6 reading level and use context-specific terms derived from the column names and context summary.
+ROLE: You are an expert business communicator writing a summary for a dataset. Your content MUST be at a Grade 6 reading level and use context-specific terms derived from the column names and context summary.
 
 DATA CONTEXT SUMMARY:
 {json.dumps(context_summary, indent=2)}
@@ -325,24 +334,53 @@ TASK: Generate an executive presentation with exactly 8 analytical sections (sli
 OUTPUT SCHEMA:
 - title: string
 - sections: array of objects with:
-    - sectionTitle: string
+    - sectionTitle: string (AI-generated relevant title for each slide)
     - points: array of strings
 
 CONTENT RULES:
-1. The eight section titles MUST be the EXACT titles listed below, in order.
-{analytical_titles_list}
+1. Generate 8 RELEVANT and MEANINGFUL section titles based on the data context. Titles should be:
+   - Data-driven and specific to the dataset
+   - Action-oriented and insightful
+   - Varied to cover different analytical perspectives
+   - Maximum 5 words each
 
-2. Slide 1 "About the Dataset": EXACTLY 2 bullets: (1) records + total sum, (2) average + topGroup + share + balance.
+2. Slide 1: Must be "About the Dataset" with EXACTLY 2 bullets: 
+   - (1) Record count + total sum of main value
+   - (2) Average + median + standard deviation
+
 3. Slides 2-8: Each MUST have EXACTLY 3 concise, data-driven bullets (MAX 120 chars each), including concrete numbers.
-4. Do NOT include a concluding sentence or commentary outside of the bullet points for any slide.
-5. Each bullet point MUST state a **fact or finding** derived directly from the data; avoid stating intentions, methodology, or aspirational goals. (e.g., Use: 'Salary for full-time employees is $X.' NOT: 'We should check X for Y.')
+
+4. CRITICAL: Each slide must present UNIQUE statistical insights - NO DUPLICATION of analysis across slides.
+
+5. Use appropriate statistical measures for each slide type:
+   - Overview slides: Use percentiles, ranges, coefficient of variation
+   - Segment analysis: Use group comparisons and concentration ratios  
+   - Trend analysis: Use time-based analysis, growth rates, patterns
+   - Distribution: Use quartiles, frequency analysis, spread metrics
+   - Comparative: Use ratios, percentages, relative performance
+   - Outlier detection: Use z-scores, anomaly detection, extreme values
+   - Strategic insights: Data-driven recommendations and observations
+
+6. Do NOT include a concluding sentence or commentary outside of the bullet points.
+
+7. Each bullet point MUST state a **fact or finding** derived directly from the data.
 
 STYLE: Direct, simple, data-first communication. Output JSON only.
+
+EXAMPLE TITLES (for inspiration only - create your own):
+- "Performance Overview"
+- "Top Segment Analysis" 
+- "Monthly Trends & Patterns"
+- "Value Distribution Insights"
+- "Comparative Performance"
+- "Anomaly Detection"
+- "Strategic Recommendations"
+- "Key Findings Summary"
 """.strip()
 
     return {"brief": brief, "prompt": user_prompt}
 
-# --------------- API (unchanged) ---------------
+# --------------- API (MODIFIED for AI-generated titles) ---------------
 
 @app.route('/api/analyze', methods=['POST'])
 def analyze_file():
@@ -370,7 +408,7 @@ def analyze_file():
         if "error" in analysis: return jsonify({"error": analysis["error"]}), 400
         prompt = analysis["prompt"]
 
-        # Call Gemini for text slides
+        # Call Gemini for text slides with AI-generated titles
         client = genai.Client(api_key=GEMINI_API_KEY)
         response = client.models.generate_content(
             model=MODEL_NAME,
@@ -400,13 +438,31 @@ def analyze_file():
         # Generate chart sections directly from the dataset
         chart_sections = generate_chart_specs(df)
 
-        # Merge: keep AI text sections, then append charts
-        merged_sections = (ai_presentation.get("sections") or []) + chart_sections
+        # Insert charts after specific text slides (slides 3, 5, and 7 - 0-indexed 2, 4, 6)
+        ai_sections = ai_presentation.get("sections") or []
+        target_slide_indices = [2, 4, 6]
+
+        merged_sections = []
+        chart_index = 0
+
+        for i, section in enumerate(ai_sections):
+            merged_sections.append(section)
+            
+            # Insert chart after the target slides if we have charts remaining
+            if i in target_slide_indices and chart_index < len(chart_sections):
+                merged_sections.append(chart_sections[chart_index])
+                chart_index += 1
+
+        # Add any remaining charts at the end if we didn't use all target positions
+        while chart_index < len(chart_sections):
+            merged_sections.append(chart_sections[chart_index])
+            chart_index += 1
 
         presentation = {
             "title": ai_presentation.get("title", "Data Analysis Report"),
             "sections": merged_sections
         }
+        
         # Ensure serializable
         return jsonify({"presentation": json.loads(json.dumps(presentation, default=lambda o: str(o)))})
 

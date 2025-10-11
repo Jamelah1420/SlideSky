@@ -13,6 +13,7 @@ const loadFont = () => {
 loadFont();
 
 // Import THEMES from Constants
+// NOTE: You must ensure your Constants file defines THEMES and CUSTOM_GRADIENT_TEXT_COLOR
 import { THEMES, CUSTOM_GRADIENT_TEXT_COLOR } from "./Constants";
 
 // Global style injection
@@ -93,7 +94,8 @@ const App = () => {
     const [selectedSlideIndex, setSelectedSlideIndex] = useState(0);
     const [presentation, setPresentation] = useState(null);
     const [themeKey, setThemeKey] = useState("light");
-    const theme = THEMES[themeKey] || THEMES.light; // Define theme here
+    // Theme definition: used to pass the theme object to PresentationEditor
+    const theme = THEMES[themeKey] || THEMES.light; 
     const [isLoading, setIsLoading] = useState(false);
     const [loadingProgress, setLoadingProgress] = useState(0);
     const [showModal, setShowModal] = useState(false);
@@ -104,17 +106,26 @@ const App = () => {
 
     const updatePresentationState = useCallback((newState) => { setPresentation(newState); }, []);
     const updatePresentationStateWithoutHistory = useCallback((newPresentationData) => { setPresentation(newPresentationData); }, []);
-
+    
+    // Progress interval logic
     useEffect(() => {
-        if (presentation) {
-            if (historyIndex >= 0 && JSON.stringify(presentation) === JSON.stringify(history[historyIndex])) return;
-            const newHistory = history.slice(0, historyIndex + 1);
-            newHistory.push(presentation);
-            setHistory(newHistory);
-            setHistoryIndex(newHistory.length - 1);
-        }
-    }, [presentation, history, historyIndex]);
-
+      let interval; 
+      if (isLoading) {
+        setLoadingProgress(0);
+        interval = setInterval(() => { 
+          setLoadingProgress(prev => {
+            const increment = rawMeta ? (Math.random() * 5 + 3) : (Math.random() * 1.5 + 0.5);
+            return Math.min(95, prev + increment);
+          });
+        }, 400); 
+      } else { 
+        setLoadingProgress(100);
+        const timeout = setTimeout(() => setLoadingProgress(0), 1000); // Reset after completion visibility
+        return () => clearTimeout(timeout);
+      }
+      return () => clearInterval(interval);
+    }, [isLoading, rawMeta]);
+    
     const undo = useCallback(() => {
         if (historyIndex > 0) {
             const newIndex = historyIndex - 1;
@@ -189,12 +200,11 @@ const App = () => {
 
     const triggerFileInput = () => { if (fileInputRef.current) { fileInputRef.current.value = null; fileInputRef.current.click(); } };
 
-    // --- MODIFIED initializeHistory for fixed Contents layout ---
+    // --- MODIFIED: initializeHistory for AI-generated titles ---
     const initializeHistory = useCallback((initialPresentation) => {
         let originalSections = normalizeSections(initialPresentation.sections || []);
-        const finalSections = [];
-
-        // LIFT OUT SPECIFIC SECTIONS
+        
+        // Find and separate special sections
         const findAndRemoveSection = (keyword) => {
             const index = originalSections.findIndex(s => s.sectionTitle?.toLowerCase().includes(keyword.toLowerCase()));
             if (index !== -1) return originalSections.splice(index, 1)[0];
@@ -202,58 +212,59 @@ const App = () => {
         };
 
         const contentsSection = findAndRemoveSection('contents');
-        const relevantInquiryContent = findAndRemoveSection('relevant inquiries');
         const aboutDatasetContent = findAndRemoveSection('about the dataset');
         
-        // Remove section title placeholders which were automatically generated for these parts
+        // Remove section title placeholders
         originalSections = originalSections.filter(s => 
             !s.isSectionTitle || 
-            (s.sectionTitle.toLowerCase() !== "relevant inquiries" && s.sectionTitle.toLowerCase() !== "about the dataset")
+            (s.sectionTitle.toLowerCase() !== "about the dataset")
         );
 
-        // TOC BUILDER
+        // Build Contents points from AI-generated titles
         const contentsPoints = [];
-        let sectionIndex = 3; // Start numbering for regular sections/charts after the fixed 2
-
-        // 1. Fixed: About the Dataset (Part 1)
+        
+        // Fixed sections
         if (aboutDatasetContent) {
-            // Use stripHtml on sectionTitle because it might contain unwanted AI formatting
-            contentsPoints.push(`About the dataset: ${stripHtml(aboutDatasetContent.sectionTitle)} Part 1`);
+            contentsPoints.push(`About the dataset`);
         }
-        // 2. Fixed: Relevant Inquiries (Part 2)
-        if (relevantInquiryContent) {
-            contentsPoints.push(`Relevant inquiries: ${stripHtml(relevantInquiryContent.sectionTitle)} Part 2`);
-        }
+        contentsPoints.push(`Relevant Inquiries`);
 
-        // Non-chart analytical slides (from AI) - use Section X label
-        const nonChartSlides = originalSections.filter(s => !s.isChartSlide && !s.isSectionTitle && !s.isThankYou);
-        nonChartSlides.forEach((slide) => {
-            const title = stripHtml(slide.sectionTitle).replace('Key Finding: ', '').trim();
-            contentsPoints.push(`${title} Section ${sectionIndex++}`);
+        // Process remaining sections in order (charts are already inserted by backend)
+        originalSections.forEach((slide, index) => {
+            const title = stripHtml(slide.sectionTitle).trim();
+            
+            if (slide.isChartSlide) {
+                // Chart slides get "Chart" label
+                contentsPoints.push(`${title} Chart`);
+            } else if (!slide.isThankYou && !slide.isSectionTitle && title.toLowerCase() !== 'about the dataset') {
+                // Regular text slides use AI-generated titles
+                contentsPoints.push(title);
+            }
         });
 
-        // Chart slides (from backend) - use Chart X label
-        const chartSlides = originalSections.filter(s => s.isChartSlide);
-        chartSlides.forEach((slide, idx) => {
-            const title = stripHtml(slide.sectionTitle).replace('Key Finding: ', '').trim();
-            contentsPoints.push(`${title} Chart ${idx + 1}`);
+        // Build final deck - PRESERVE THE ORDER from backend (charts already inserted)
+        const finalSections = [];
+        
+        // Add Test slide after title slide
+        finalSections.push({ 
+            sectionTitle: "Contents", 
+            points: contentsPoints,
+            isTestSlide: true 
         });
 
-        // BUILD FINAL DECK
-        finalSections.push({ ...(contentsSection || { sectionTitle: 'Contents', points: [] }), points: contentsPoints.slice(0, 20) });
-
-        // Add Section/Detail slides in the specific order
+        // Add fixed sections
         if (aboutDatasetContent) {
             finalSections.push({ sectionTitle: "About the Dataset", isSectionTitle: true, points: [] });
             finalSections.push({ ...aboutDatasetContent, sectionTitle: 'Dataset & Scope' });
         }
-        if (relevantInquiryContent) {
-            finalSections.push({ sectionTitle: "Relevant Inquiries", isSectionTitle: true, points: [] });
-            finalSections.push({ ...relevantInquiryContent, sectionTitle: 'Key Questions & Analysis' });
-        }
 
-        finalSections.push(...nonChartSlides);
-        finalSections.push(...chartSlides);
+        // Add Relevant Inquiries as section title only (no content slide)
+        finalSections.push({ sectionTitle: "Relevant Inquiries", isSectionTitle: true, points: [] });
+
+        // Add all remaining sections in their original order (charts are already in place)
+        finalSections.push(...originalSections.filter(s => !s.isThankYou && s.sectionTitle.toLowerCase() !== 'about the dataset'));
+        
+        // Add thank you slide
         finalSections.push({ sectionTitle: "Thanks for watching!", points: [], isThankYou: true });
 
         const finalPresentation = { ...initialPresentation, sections: finalSections };
@@ -283,7 +294,6 @@ const App = () => {
                 title: "Data Analysis Report (Fallback)",
                 sections: [
                     { sectionTitle: "Contents", points: ["Dataset structure and scope", "Summary of key values"] },
-                    { sectionTitle: "Relevant Inquiries", points: ["What are the main business values?", "Which customer segments are driving value?"] },
                     { sectionTitle: "About the Dataset", points: [`${p.nRows.toLocaleString()} records across ${p.nCols} data fields.`, `Total value recorded: ${primaryMetricFallback ? formatNum(primaryMetricFallback.sum) : 'N/A'}.`] },
                 ]
             };
@@ -295,108 +305,22 @@ const App = () => {
         }
     };
 
-    const exportToPptx = () => {
-        if (!presentation) return;
-        const t = theme;
-        const pptx = new PptxGenJS();
-        pptx.layout = "LAYOUT_16x9";
-        const colorText = t?.pageText?.replace("#", "") || "000000";
-        const addFooter = (slide) => { 
-          slide.addText("Auto-generated insights • " + new Date().toLocaleString(), { 
-            x: 0.3, y: 6.7, w: 9.2, h: 0.3, fontSize: 9, color: "A7AAB3", align: "right", fontFace: "Calibri" 
-          }); 
-        };
-
-        let hero = pptx.addSlide();
-        hero.addText((presentation.title || '').replace(/<[^>]*>/g, ''), { 
-          x: 0.5, y: 3, w: 9, h: 1, fontSize: 40, bold: true, color: CUSTOM_GRADIENT_TEXT_COLOR.replace("#", ""), align: 'center', isHtml: false, fontFace: "Calibri" 
-        });
-
-        (presentation.sections || []).forEach(section => {
-            let s = pptx.addSlide();
-            const isSpecialTitle = section.isSectionTitle || section.isThankYou;
-            if (isSpecialTitle) {
-                s.addText(section.sectionTitle.replace(/<[^>]*>/g, ''), { 
-                  x: 0.5, y: 3, w: 9, h: 1, fontSize: 40, bold: true, color: CUSTOM_GRADIENT_TEXT_COLOR.replace("#", ""), align: 'center', fontFace: "Calibri" 
-                });
-            } else if (section.isChartSlide) {
-                s.addText(section.sectionTitle.replace(/<[^>]*>/g, ''), { 
-                  x: 0.5, y: 0.5, w: 9, h: 1, fontSize: 24, bold: true, color: colorText, align: 'center', fontFace: "Calibri" 
-                });
-                s.addText("[Chart: " + section.sectionTitle + "]", { 
-                  x: 1.0, y: 2.0, w: 8, h: 4, fontSize: 18, color: colorText, align: 'center', fontFace: "Calibri" 
-                });
-            } else {
-                const isContents = section.sectionTitle.toLowerCase() === "contents";
-                if (isContents) {
-                    s.addText(section.sectionTitle.replace(/<[^>]*>/g, ''), { 
-                      x: 0.8, y: 0.8, w: 9, h: 0.8, fontSize: 30, bold: true, color: colorText, isHtml: false, fontFace: "Calibri" 
-                    });
-                    const contentsText = (section.points || []).map(p => stripHtml(p)).map(line => {
-                        const match = line.match(/(.*?)(Part\s+\d+|Detail\s+\d+|Section\s+\d+|Chart\s+\d+):\s+(.*)$/);
-                        if (match) return `${match[1].trim()}\t\t${match[2]}: ${match[3]}`;
-                        const parts = line.split(': ');
-                        if (parts.length > 1) {
-                            const title = parts[0].trim();
-                            const suffix = parts.slice(1).join(': ').trim();
-                            return `${title}\t\t${suffix}`;
-                        }
-                        return line;
-                    }).join("\n");
-                    s.addText(contentsText, { 
-                      x: 1.0, y: 1.8, w: 8.5, h: 4.8, fontSize: 18, color: colorText, lineSpacing: 28, fontFace: "Calibri" 
-                    });
-                } else {
-                    s.addText(section.sectionTitle.replace(/<[^>]*>/g, ''), { 
-                      x: 0.8, y: 0.8, w: 9, h: 0.8, fontSize: 30, bold: true, color: colorText, isHtml: false, fontFace: "Calibri" 
-                    });
-                    const bullets = (section.points || []).map((p) => `• ${stripHtml(p)}`).join("\n");
-                    s.addText(bullets, { 
-                      x: 1.0, y: 1.8, w: 8.5, h: 4.8, fontSize: 18, color: colorText, lineSpacing: 28, fontFace: "Calibri" 
-                    });
-                }
-                addFooter(s);
-            }
-        });
-
-        const safe = (presentation.title || "Data Analysis Report").replace(/<[^>]*>/g, "").replace(/[\\/:*?"<>|]/g, "").slice(0, 80);
-        pptx.writeFile({ fileName: `${safe}.pptx` });
-    };
-
-    const exportToPdf = async () => {
-        const el = mainSlideRef.current;
-        if (!el) { setModalMessage("Cannot capture slide content."); setShowModal(true); return; }
-        const currentSlide = allSlides[selectedSlideIndex] || {};
-        const safeTitle = (currentSlide.sectionTitle || 'Slide').replace(/<[^>]*>/g, "").replace(/[\\/:*?"<>|]/g, "").slice(0, 50);
-        try {
-            const canvas = await html2canvas(el, { scale: 2, useCORS: true, backgroundColor: null });
-            const imgData = canvas.toDataURL('image/jpeg', 1.0);
-            const pdf = new jsPDF('l', 'mm', 'a4'); 
-            const width = pdf.internal.pageSize.getWidth();
-            const slideWidth = width - 20; 
-            const slideHeight = (slideWidth / 16) * 9;
-            const x = 10;
-            const y = (pdf.internal.pageSize.getHeight() - slideHeight) / 2; 
-            pdf.addImage(imgData, 'JPEG', x, y, slideWidth, slideHeight);
-            pdf.save(`${safeTitle}.pdf`);
-        } catch (error) { setModalMessage(`PDF Export Failed: ${error.message}.`); setShowModal(true); }
-    };
-
-    const onExport = (format) => {
-        if (!presentation) { setModalMessage("Please complete the presentation generation first."); setShowModal(true); return; }
-        if (format === 'pptx') exportToPptx();
-        else if (format === 'pdf') exportToPdf();
-    };
-
     useEffect(() => { if (rawMeta) { setIsEditorMode(true); handleGenerate(); } }, [rawMeta]);
+    
+    // NOTE: This effect is likely redundant with the one above, but kept for matching context.
     useEffect(() => {
         let interval; 
         if (isLoading) {
             setLoadingProgress(0);
             interval = setInterval(() => { setLoadingProgress(prev => Math.min(95, prev + (rawMeta ? (Math.random() * 8 + 5) : (Math.random() * 2 + 1)))); }, 300);
-        } else { setLoadingProgress(100); }
+        } else { 
+            setLoadingProgress(100); 
+            const timeout = setTimeout(() => setLoadingProgress(0), 500);
+            return () => clearTimeout(timeout);
+        }
         return () => clearInterval(interval);
     }, [isLoading, rawMeta]);
+    
     useEffect(() => { if (presentation) setSelectedSlideIndex(0); }, [presentation]);
 
     const allSlides = useMemo(() => {
@@ -432,7 +356,8 @@ const App = () => {
                     loadingProgress={loadingProgress}
                     selectedSlideIndex={selectedSlideIndex}
                     setSelectedSlideIndex={setSelectedSlideIndex}
-                    theme={THEMES}
+                    // Passing the correct single theme object
+                    theme={theme} 
                     themeKey={themeKey}
                     setThemeKey={setThemeKey}
                     showModal={showModal}
@@ -446,8 +371,7 @@ const App = () => {
                     // Handlers
                     handleFileChange={handleFileChange}
                     triggerFileInput={triggerFileInput}
-                    onExport={onExport}
-                    handleContentUpdate={handleContentUpdate}
+                     handleContentUpdate={handleContentUpdate}
                     handleTitleChange={handleTitleChange}
                     handleHeroTitleChange={handleHeroTitleChange}
                     handlePointChange={handlePointChange}
